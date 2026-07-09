@@ -1,0 +1,890 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mapa Interativo - UTFPR Apucarana</title>
+    <!-- Biblioteca essencial para ler a planilha do Google Sheets (CSV) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    
+    <style>
+        :root {
+            --amarelo-utfpr: #FFD100;
+            --fundo-escuro: #111111;
+            --cinza-painel: #1A1A1A;
+            --cinza-borda: #333333;
+            --texto-claro: #FFFFFF;
+            --texto-mutado: #AAAAAA;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        body {
+            background-color: #0A0A0A;
+            color: var(--texto-claro);
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            /* overflow: hidden; removido para não interferir na rolagem mobile */
+        }
+
+        /* Topo da Página */
+        header {
+            background-color: var(--fundo-escuro);
+            padding: 15px 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 3px solid var(--amarelo-utfpr);
+            height: 70px;
+        }
+
+        header h1 {
+            font-size: 1.4rem;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+        }
+
+        header h1 span {
+            color: var(--amarelo-utfpr);
+        }
+
+        /* Container Principal (Split Screen) */
+        .main-container {
+            display: flex;
+            flex: 1;
+            height: calc(100vh - 70px);
+            overflow: hidden; /* Mantido aqui para desktop */
+        }
+
+        /* LADO ESQUERDO: O MAPA */
+        .map-section {
+            flex: 1;
+            position: relative;
+            background-color: #151515;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            overflow: auto; /* Permite rolar se o mapa for maior que a tela (crucial para desktop e mobile) */
+        }
+
+        .map-wrapper {
+            position: relative;
+            display: inline-block;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            border-radius: 8px;
+            /* overflow: hidden; Removido para garantir que as bordas da imagem não sejam cortadas durante o pan */
+        }
+
+        /* Imagem aérea real do campus */
+        .map-image {
+            display: block;
+            max-width: 100%;
+            height: auto;
+            max-height: 80vh; /* Limite de altura para desktop */
+        }
+
+        /* Regiões Interativas sobre os Prédios (Hotspots) */
+        .building-hotspot {
+            position: absolute;
+            background-color: rgba(255, 209, 0, 0.15);
+            border: 2px dashed var(--amarelo-utfpr);
+            border-radius: 6px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s ease;
+        }
+
+        .building-hotspot:hover, .building-hotspot.active {
+            background-color: rgba(255, 209, 0, 0.4);
+            border-style: solid;
+            box-shadow: 0 0 15px var(--amarelo-utfpr);
+        }
+
+        .building-label {
+            background-color: rgba(0, 0, 0, 0.85);
+            color: #FFF;
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: bold;
+            border: 1px solid var(--amarelo-utfpr);
+            pointer-events: none;
+            white-space: nowrap;
+        }
+
+        /* LADO DIREITO: PAINEL DE CONTROLE E BUSCA */
+        .sidebar {
+            width: 420px;
+            background-color: var(--cinza-painel);
+            border-left: 1px solid var(--cinza-borda);
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+        }
+
+        /* Caixa de Pesquisa */
+        .search-box {
+            padding: 20px;
+            border-bottom: 1px solid var(--cinza-borda);
+        }
+
+        .search-input-wrapper {
+            position: relative;
+        }
+
+        .search-input {
+            width: 100%;
+            padding: 12px 15px;
+            background-color: var(--fundo-escuro);
+            border: 1px solid var(--cinza-borda);
+            border-radius: 6px;
+            color: white;
+            font-size: 0.95rem;
+            transition: border-color 0.3s;
+        }
+
+        .search-input:focus {
+            outline: none;
+            border-color: var(--amarelo-utfpr);
+        }
+
+        /* Área de Resultados Dinâmicos */
+        .content-area {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+        }
+
+        .section-title {
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--amarelo-utfpr);
+        }
+
+        .subsection-title {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: #888;
+            margin: 15px 0 10px 0;
+            border-bottom: 1px solid var(--cinza-borda);
+            padding-bottom: 5px;
+        }
+
+        .header-lista {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        .btn-limpar {
+            display: none;
+            background-color: #333;
+            color: #FFF;
+            border: 1px solid #555;
+            padding: 4px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.75rem;
+            transition: all 0.2s;
+        }
+
+        .btn-limpar:hover {
+            background-color: var(--amarelo-utfpr);
+            color: #000;
+        }
+
+        /* Lista de Setores */
+        .sectors-list {
+            list-style: none;
+            margin-bottom: 25px;
+        }
+
+        .sector-item {
+            background-color: var(--fundo-escuro);
+            border-radius: 6px;
+            margin-bottom: 8px;
+            border: 1px solid transparent;
+            transition: all 0.2s;
+        }
+
+        .sector-item-main {
+            padding: 12px 15px;
+            cursor: pointer;
+        }
+
+        .sector-item:hover {
+            border-color: #444;
+            background-color: #151515;
+        }
+
+        .sector-item.selected {
+            border-color: var(--amarelo-utfpr);
+            background-color: rgba(255, 209, 0, 0.05);
+        }
+
+        .sector-item-details {
+            display: none;
+            padding: 0 15px 15px 15px;
+            border-top: 1px solid var(--cinza-borda);
+            margin-top: 5px;
+            padding-top: 15px;
+            cursor: default;
+        }
+
+        .sector-item.selected .sector-item-details {
+            display: block;
+            animation: fadeIn 0.2s ease-out;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-5px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .sector-item-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .sector-sigla {
+            font-weight: bold;
+            color: var(--amarelo-utfpr);
+        }
+
+        .sector-predio-tag {
+            font-size: 0.75rem;
+            background-color: #222;
+            padding: 2px 6px;
+            border-radius: 4px;
+            color: var(--texto-mutado);
+        }
+
+        .ambiente-tag {
+            background-color: #2a3b4c;
+            color: #8ab4f8;
+        }
+
+        .sector-name-mini {
+            font-size: 0.85rem;
+            color: var(--texto-mutado);
+            margin-top: 2px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        /* Ficha de Detalhes do Setor */
+        .detail-panel {
+            background-color: var(--fundo-escuro);
+            border: 1px solid var(--cinza-borda);
+            border-radius: 8px;
+            padding: 20px;
+            display: none;
+        }
+
+        .detail-header {
+            border-bottom: 1px solid var(--cinza-borda);
+            padding-bottom: 12px;
+            margin-bottom: 15px;
+        }
+
+        .detail-title {
+            font-size: 1.15rem;
+            color: #FFF;
+            margin-top: 4px;
+        }
+        
+        /* Ficha de Detalhes do Setor (Agora Embutida) */
+        .detail-field {
+            margin-bottom: 12px;
+        }
+
+        .detail-label {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            color: var(--texto-mutado);
+            font-weight: bold;
+            margin-bottom: 2px;
+        }
+
+        .detail-value {
+            font-size: 0.9rem;
+            color: #E0E0E0;
+        }
+
+        .staff-list {
+            padding-left: 18px;
+            font-size: 0.9rem;
+            color: #E0E0E0;
+        }
+
+        .msg-vazio {
+            color: var(--texto-mutado);
+            font-style: italic;
+            text-align: center;
+            font-size: 0.9rem;
+            margin-top: 40px;
+        }
+
+        .loading {
+            text-align: center;
+            color: var(--amarelo-utfpr);
+            margin-top: 50px;
+            font-weight: bold;
+            padding: 20px;
+            background-color: rgba(255, 68, 68, 0.1);
+            border-radius: 8px;
+        }
+
+        /* =========================================================================
+           RESPONSIVIDADE (Telas menores, Celulares e Tablets) 
+           ========================================================================= */
+        @media (max-width: 850px) {
+            header {
+                padding: 10px 15px;
+                height: 60px;
+            }
+
+            header h1 {
+                font-size: 1.1rem;
+            }
+
+            .main-container {
+                flex-direction: column; /* Coloca o mapa em cima e a lista embaixo */
+                height: calc(100vh - 60px);
+                overflow: hidden; /* Container principal ainda esconde o overflow extra */
+            }
+
+            .map-section {
+                width: 100%;
+                flex: 0 0 45%; /* O mapa vai ocupar 45% da altura da tela */
+                padding: 0;
+                border-bottom: 2px solid var(--cinza-borda);
+                overflow-x: auto; /* PERMITE ROLAGEM HORIZONTAL no mapa (PAN) */
+                overflow-y: auto; /* PERMITE ROLAGEM VERTICAL no mapa (PAN) */
+                justify-content: flex-start; /* Alinha o conteúdo ao início para rolagem natural */
+                align-items: flex-start; /* Alinha o conteúdo ao início para rolagem natural */
+            }
+
+            .map-wrapper {
+                border-radius: 0; 
+                box-shadow: none;
+                /* Crucial: Definir um tamanho mínimo para o wrapper no mobile para que a imagem não "esprema" 
+                   e os hotspots (% relativas) mantenham suas posições corretas na foto. */
+                min-width: 800px; /* Largura mínima para permitir a leitura e o arraste */
+                display: block; /* Garante que ocupe o espaço correto */
+            }
+
+            .map-image {
+                width: 100%; /* Força a imagem a preencher a largura mínima do wrapper */
+                max-width: none;
+                max-height: none; /* Remove restrição de altura */
+                height: auto;
+                display: block;
+            }
+
+            .sidebar {
+                width: 100%;
+                flex: 0 0 55%; /* A barra lateral ocupa os 55% restantes */
+                border-left: none;
+            }
+
+            .building-label {
+                font-size: 0.65rem;
+                padding: 2px 6px;
+            }
+            
+            /* Ajuste extra para a lista ficar um pouco mais compacta no mobile */
+            .search-box {
+                padding: 15px;
+            }
+            .content-area {
+                padding: 15px;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>UTFPR Apucarana | <span>Mapa do Campus</span></h1>
+        <div>COGERH</div>
+    </header>
+
+    <div class="main-container">
+        
+        <div class="map-section">
+            <div class="map-wrapper">
+                <img src="https://i.imgur.com/7N4iDUA.png" alt="Mapa Aéreo do Campus" class="map-image" id="campus-photo">
+                
+                <div class="building-hotspot" id="geo-bloco-a" style="top: 40%; left: 18.3%; width: 4.2%; height: 9%;" onclick="clickBuilding('bloco-a')"><span class="building-label">A</span></div>
+                <div class="building-hotspot" id="geo-bloco-b" style="top: 40%; left: 23.6%; width: 7%; height: 9%;" onclick="clickBuilding('bloco-b')"><span class="building-label">B</span></div>
+                <div class="building-hotspot" id="geo-bloco-c" style="top: 50.8%; left: 23.5%; width: 9.5%; height: 11%;" onclick="clickBuilding('bloco-c')"><span class="building-label">C</span></div>
+                <div class="building-hotspot" id="geo-bloco-d" style="top: 53.5%; left: 18%; width: 4.5%; height: 7%;" onclick="clickBuilding('bloco-d')"><span class="building-label">D</span></div>
+                <div class="building-hotspot" id="geo-bloco-e" style="top: 43.5%; left: 43.5%; width: 12%; height: 16%;" onclick="clickBuilding('bloco-e')"><span class="building-label">E</span></div>
+                <div class="building-hotspot" id="geo-bloco-f" style="top: 24.8%; left: 25.8%; width: 3.2%; height: 13%;" onclick="clickBuilding('bloco-f')"><span class="building-label">F</span></div>
+                <div class="building-hotspot" id="geo-bloco-h" style="top: 11%; left: 26.3%; width: 3%; height: 12%;" onclick="clickBuilding('bloco-h')"><span class="building-label">H</span></div>
+                <div class="building-hotspot" id="geo-bloco-i" style="top: 11%; left: 30.2%; width: 3%; height: 12%;" onclick="clickBuilding('bloco-i')"><span class="building-label">I</span></div>
+                <div class="building-hotspot" id="geo-bloco-j" style="top: 11%; left: 34.1%; width: 3%; height: 12%;" onclick="clickBuilding('bloco-j')"><span class="building-label">J</span></div>
+                <div class="building-hotspot" id="geo-bloco-k" style="top: 11%; left: 38.1%; width: 3%; height: 12%;" onclick="clickBuilding('bloco-k')"><span class="building-label">K</span></div>
+                <div class="building-hotspot" id="geo-bloco-l" style="top: 30.5%; left: 50%; width: 14%; height: 9%;" onclick="clickBuilding('bloco-l')"><span class="building-label">L</span></div>
+                <div class="building-hotspot" id="geo-bloco-m" style="top: 20.5%; left: 50%; width: 14%; height: 9%;" onclick="clickBuilding('bloco-m')"><span class="building-label">M</span></div>
+                <div class="building-hotspot" id="geo-bloco-ci" style="top: 43%; left: 56%; width: 7.5%; height: 9%;" onclick="clickBuilding('bloco-ci')"><span class="building-label">CI</span></div>
+                <div class="building-hotspot" id="geo-bloco-n" style="top: 30%; left: 67%; width: 15.5%; height: 10.5%;" onclick="clickBuilding('bloco-n')"><span class="building-label">N</span></div>
+                <div class="building-hotspot" id="geo-bloco-o" style="top: 21%; left: 67%; width: 15.5%; height: 9%;" onclick="clickBuilding('bloco-o')"><span class="building-label">O</span></div>
+                <div class="building-hotspot" id="geo-bloco-p" style="top: 20.6%; left: 83%; width: 5%; height: 20%;" onclick="clickBuilding('bloco-p')"><span class="building-label">P</span></div>
+                <div class="building-hotspot" id="geo-campo" style="top: 77%; left: 49%; width: 12%; height: 10%;" onclick="clickBuilding('campo')"><span class="building-label">Campo</span></div>
+                <div class="building-hotspot" id="geo-quadra" style="top: 69.5%; left: 69.7%; width: 8%; height: 24%;" onclick="clickBuilding('quadra')"><span class="building-label">Quadra</span></div>
+            </div>
+        </div>
+
+        <div class="sidebar">
+            <div class="search-box">
+                <div class="search-input-wrapper">
+                    <input type="text" id="input-busca" class="search-input" placeholder="Buscar setor por nome ou sigla (ex: COGERH)..." oninput="searchSectors()">
+                </div>
+            </div>
+
+            <div class="content-area">
+                <div id="status-carregamento" class="loading" style="background-color: transparent;">Conectando com a Planilha da COGERH...</div>
+
+                <div id="lista-container" style="display: none;">
+                    <div class="header-lista">
+                        <h2 class="section-title" id="titulo-lista">Setores no Campus</h2>
+                        <button id="btn-limpar-filtro" class="btn-limpar" onclick="clearBuildingFilter()">Mostrar Todos</button>
+                    </div>
+                    <ul class="sectors-list" id="lista-setores">
+                    </ul>
+                </div>
+                
+                <div id="mensagem-inicial" class="msg-vazio" style="display: none;">
+                    Clique em um prédio no mapa ou utilize o campo de busca para listar as informações.
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        // ====================================================================================
+        // CONFIGURAÇÃO DA PLANILHA: Link CSV gerado pelo Google Sheets
+        // ====================================================================================
+        const LINK_PLANILHA = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSLecxzG1crG7fmsRQ4_qi0pKeP0IoIOr1NVyxwEDCzI3A-fpSL7PVZkDLVqhKGdpNJ8kn-d7XzNjJp/pub?gid=0&single=true&output=csv";
+        
+        // Coloque aqui o link da SEGUNDA ABA (Salas e Laboratórios)
+        const LINK_PLANILHA_AMBIENTES = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSLecxzG1crG7fmsRQ4_qi0pKeP0IoIOr1NVyxwEDCzI3A-fpSL7PVZkDLVqhKGdpNJ8kn-d7XzNjJp/pub?gid=1261451119&single=true&output=csv"; 
+
+        // Variáveis globais do sistema
+        let dadosCampus = {};
+        let blocoAtivoAtual = null;
+
+        async function carregarDadosDaPlanilha() {
+            const statusEl = document.getElementById('status-carregamento');
+
+            if (!LINK_PLANILHA.startsWith("https")) {
+                statusEl.innerHTML = "Link inválido. Por favor, insira o link completo começando com https://";
+                statusEl.style.color = "#ff4444";
+                return;
+            }
+
+            try {
+                // Função auxiliar para baixar e ler CSV aguardando a resposta (Promise)
+                const lerCSV = (url) => {
+                    return new Promise((resolve, reject) => {
+                        if (!url || !url.startsWith("https")) { resolve([]); return; }
+                        Papa.parse(url, {
+                            download: true,
+                            header: true,
+                            skipEmptyLines: true,
+                            transformHeader: function(header) {
+                                return header.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().replace(/\s+/g, "_");
+                            },
+                            complete: function(resultados) { resolve(resultados.data); },
+                            error: function(erro) { reject(erro); }
+                        });
+                    });
+                };
+
+                // Baixa as duas abas simultaneamente!
+                const [dadosSetores, dadosAmbientes] = await Promise.all([
+                    lerCSV(LINK_PLANILHA),
+                    lerCSV(LINK_PLANILHA_AMBIENTES)
+                ]);
+
+                // Verificações de erro (Login Institucional) na aba 1
+                if (dadosSetores.length > 0) {
+                    const firstKey = Object.keys(dadosSetores[0])[0];
+                    if (firstKey && firstKey.includes('<html')) {
+                        statusEl.style.backgroundColor = "rgba(255, 68, 68, 0.1)";
+                        statusEl.style.color = "#ff4444";
+                        statusEl.innerHTML = `
+                            <h3 style="margin-bottom:10px;">⚠️ Planilha Bloqueada</h3>
+                            <p style="font-size:0.9rem; font-weight:normal;">A planilha está exigindo login da UTFPR.<br><br>
+                            Desmarque a opção de restringir aos usuários da UTFPR e tente novamente.</p>`;
+                        return;
+                    }
+                }
+
+                processarPlanilha(dadosSetores, dadosAmbientes);
+
+            } catch (e) {
+                statusEl.innerHTML = "Ocorreu um erro na conexão com a planilha.";
+                statusEl.style.color = "#ff4444";
+            }
+        }
+
+        function processarPlanilha(linhasSetores, linhasAmbientes) {
+            // Processa a Aba 1: Setores
+            linhasSetores.forEach(linha => {
+                const idBloco = linha.id_bloco ? linha.id_bloco.toLowerCase().trim() : null;
+                if (!idBloco) return;
+                
+                if (!dadosCampus[idBloco]) {
+                    dadosCampus[idBloco] = { nome: linha.nome_predio || idBloco.toUpperCase(), setores: [], ambientes: [] };
+                }
+
+                dadosCampus[idBloco].setores.push({
+                    sigla: linha.sigla || "",
+                    nome: linha.nome_setor || "",
+                    descricao: linha.descricao || "",
+                    servidores: linha.servidores ? linha.servidores.split(',').map(s => s.trim()) : [], 
+                    horario: linha.horario || "",
+                    contato: linha.contato || "",
+                    piso: linha.piso || "" // NOVO: Captura a coluna 'piso'
+                });
+            });
+
+            // Processa a Aba 2: Ambientes (Salas, Labs, etc)
+            linhasAmbientes.forEach(linha => {
+                const idBloco = linha.id_bloco ? linha.id_bloco.toLowerCase().trim() : null;
+                if (!idBloco) return;
+                
+                if (!dadosCampus[idBloco]) {
+                    dadosCampus[idBloco] = { nome: linha.nome_predio || idBloco.toUpperCase(), setores: [], ambientes: [] };
+                }
+
+                dadosCampus[idBloco].ambientes.push({
+                    nome: linha.nome_ambiente || "",
+                    tipo: linha.tipo || "Ambiente",
+                    descricao: linha.descricao || "",
+                    piso: linha.piso || "" // NOVO: Captura a coluna 'piso'
+                });
+            });
+
+            // Ordena os setores e ambientes alfabeticamente dentro de cada bloco
+            for (const buildingId in dadosCampus) {
+                dadosCampus[buildingId].setores.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+                dadosCampus[buildingId].ambientes.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+            }
+
+            // Conclui o carregamento
+            document.getElementById('status-carregamento').style.display = 'none';
+            document.getElementById('lista-container').style.display = 'block';
+            document.getElementById('mensagem-inicial').style.display = 'block';
+            renderAllSectors();
+        }
+
+        // Renderiza a lista inicial
+        function renderAllSectors() {
+            const lista = document.getElementById('lista-setores');
+            lista.innerHTML = '';
+            
+            // Ordena os blocos alfabeticamente pelo nome do prédio
+            const blocosOrdenados = Object.keys(dadosCampus).sort((a, b) => {
+                return dadosCampus[a].nome.localeCompare(dadosCampus[b].nome, 'pt-BR');
+            });
+
+            for (const buildingId of blocosOrdenados) {
+                // Renderiza primeiro os Setores
+                dadosCampus[buildingId].setores.forEach(setor => {
+                    lista.appendChild(createSectorItemElement(setor, buildingId));
+                });
+                // Em seguida, renderiza os Ambientes
+                dadosCampus[buildingId].ambientes.forEach(ambiente => {
+                    lista.appendChild(createEnvironmentItemElement(ambiente, buildingId));
+                });
+            }
+        }
+
+        function createSectorItemElement(setor, buildingId) {
+            const li = document.createElement('li');
+            li.className = 'sector-item';
+            li.id = `item-${setor.sigla}`;
+            
+            // Tratamento de segurança caso o nome do prédio venha vazio da planilha
+            const nomePredio = dadosCampus[buildingId] && dadosCampus[buildingId].nome ? dadosCampus[buildingId].nome.split(' - ')[0] : buildingId;
+            const pisoInfo = setor.piso ? ` | ${setor.piso}` : "";
+
+            // Área clicável (cabeçalho do item)
+            const mainDiv = document.createElement('div');
+            mainDiv.className = 'sector-item-main';
+            mainDiv.onclick = () => selectSector(setor, buildingId);
+            mainDiv.innerHTML = `
+                <div class="sector-item-header">
+                    <span class="sector-sigla">${setor.sigla}</span>
+                    <span class="sector-predio-tag">${nomePredio}${pisoInfo}</span>
+                </div>
+                <div class="sector-name-mini">${setor.nome}</div>
+            `;
+
+            // Painel de detalhes (escondido por padrão, aberto ao clicar)
+            const detailsDiv = document.createElement('div');
+            detailsDiv.className = 'sector-item-details';
+            
+            let servidoresHTML = setor.servidores.map(s => `<li>${s}</li>`).join('');
+            
+            const detalhePiso = setor.piso ? `
+                <div class="detail-field">
+                    <div class="detail-label">Localização no Prédio</div>
+                    <div class="detail-value">${setor.piso}</div>
+                </div>` : "";
+
+            detailsDiv.innerHTML = `
+                ${detalhePiso}
+                <div class="detail-field">
+                    <div class="detail-label">Descrição</div>
+                    <div class="detail-value">${setor.descricao}</div>
+                </div>
+                <div class="detail-field">
+                    <div class="detail-label">Equipe / Servidores</div>
+                    <ul class="staff-list">${servidoresHTML}</ul>
+                </div>
+                <div class="detail-field">
+                    <div class="detail-label">Horário de Funcionamento</div>
+                    <div class="detail-value">${setor.horario}</div>
+                </div>
+                <div class="detail-field">
+                    <div class="detail-label">Canais de Contato</div>
+                    <div class="detail-value" style="color: var(--amarelo-utfpr); font-size: 0.85rem;">${setor.contato}</div>
+                </div>
+            `;
+
+            li.appendChild(mainDiv);
+            li.appendChild(detailsDiv);
+            return li;
+        }
+
+        // Nova função para criar o cartão simplificado de Salas/Laboratórios
+        function createEnvironmentItemElement(ambiente, buildingId) {
+            const li = document.createElement('li');
+            li.className = 'sector-item'; 
+            
+            const nomePredio = dadosCampus[buildingId] && dadosCampus[buildingId].nome ? dadosCampus[buildingId].nome.split(' - ')[0] : buildingId;
+            const pisoInfo = ambiente.piso ? ` | ${ambiente.piso}` : "";
+
+            // Cria um ID único e seguro baseado no nome do ambiente
+            const safeId = "env-" + ambiente.nome.replace(/\s+/g, '-').toLowerCase();
+            li.id = `item-${safeId}`;
+
+            const mainDiv = document.createElement('div');
+            mainDiv.className = 'sector-item-main';
+            mainDiv.onclick = () => selectSector({ sigla: safeId }, buildingId); 
+            
+            mainDiv.innerHTML = `
+                <div class="sector-item-header">
+                    <span class="sector-sigla" style="color: #8ab4f8;">${ambiente.nome}</span>
+                    <span class="sector-predio-tag ambiente-tag">${nomePredio}${pisoInfo}</span>
+                </div>
+                <div class="sector-name-mini">${ambiente.tipo}</div>
+            `;
+
+            const detailsDiv = document.createElement('div');
+            detailsDiv.className = 'sector-item-details';
+            
+            const detalhePiso = ambiente.piso ? `
+                <div class="detail-field">
+                    <div class="detail-label">Localização no Prédio</div>
+                    <div class="detail-value">${ambiente.piso}</div>
+                </div>` : "";
+
+            detailsDiv.innerHTML = `
+                ${detalhePiso}
+                <div class="detail-field">
+                    <div class="detail-label">Descrição / Utilização</div>
+                    <div class="detail-value">${ambiente.descricao || "Sem descrição adicional disponível."}</div>
+                </div>
+            `;
+
+            li.appendChild(mainDiv);
+            li.appendChild(detailsDiv);
+            return li;
+        }
+
+        // Ao clicar em um prédio no mapa
+        function clickBuilding(buildingId) {
+            // Remove destaques anteriores
+            document.querySelectorAll('.building-hotspot').forEach(el => el.classList.remove('active'));
+            document.getElementById('mensagem-inicial').style.display = 'block';
+
+            // Exibe o botão de limpar filtro
+            document.getElementById('btn-limpar-filtro').style.display = 'block';
+
+            const blocoInfo = dadosCampus[buildingId];
+            const temSetores = blocoInfo && blocoInfo.setores && blocoInfo.setores.length > 0;
+            const temAmbientes = blocoInfo && blocoInfo.ambientes && blocoInfo.ambientes.length > 0;
+
+            // Correção do erro ao clicar num prédio vazio
+            if (!temSetores && !temAmbientes) {
+                document.getElementById('mensagem-inicial').textContent = "Nenhum setor ou ambiente cadastrado neste bloco ainda.";
+                document.getElementById('lista-setores').innerHTML = '';
+                document.getElementById('titulo-lista').textContent = "Informações do Bloco";
+                blocoAtivoAtual = buildingId;
+                const hotspot = document.getElementById(`geo-${buildingId}`);
+                if (hotspot) hotspot.classList.add('active');
+                return;
+            }
+
+            document.getElementById('mensagem-inicial').textContent = "Selecione um item na lista acima para ver os detalhes.";
+
+            blocoAtivoAtual = buildingId;
+            document.getElementById(`geo-${buildingId}`).classList.add('active');
+
+            // Filtra lista lateral pelo prédio selecionado
+            document.getElementById('titulo-lista').textContent = `Localizados no ${blocoInfo.nome}`;
+            const lista = document.getElementById('lista-setores');
+            lista.innerHTML = '';
+
+            // Renderiza subtítulo e lista de Setores (se houver)
+            if (temSetores) {
+                const subSetores = document.createElement('h3');
+                subSetores.className = 'subsection-title';
+                subSetores.textContent = 'Setores Administrativos';
+                lista.appendChild(subSetores);
+
+                blocoInfo.setores.forEach(setor => {
+                    lista.appendChild(createSectorItemElement(setor, buildingId));
+                });
+            }
+
+            // Renderiza subtítulo e lista de Ambientes (se houver)
+            if (temAmbientes) {
+                const subAmbientes = document.createElement('h3');
+                subAmbientes.className = 'subsection-title';
+                subAmbientes.textContent = 'Salas e Laboratórios';
+                lista.appendChild(subAmbientes);
+
+                blocoInfo.ambientes.forEach(ambiente => {
+                    lista.appendChild(createEnvironmentItemElement(ambiente, buildingId));
+                });
+            }
+            
+            document.getElementById('lista-container').style.display = 'block';
+        }
+
+        // Limpa o filtro de bloco e volta a exibir todos os setores
+        function clearBuildingFilter() {
+            blocoAtivoAtual = null;
+            document.querySelectorAll('.building-hotspot').forEach(el => el.classList.remove('active'));
+            
+            document.getElementById('titulo-lista').textContent = "Setores no Campus";
+            document.getElementById('btn-limpar-filtro').style.display = 'none';
+            
+            document.getElementById('mensagem-inicial').textContent = "Clique em um prédio no mapa ou utilize o campo de busca para listar as informações.";
+            document.getElementById('mensagem-inicial').style.display = 'block';
+            
+            // Limpa o campo de busca se houver algo digitado nele
+            document.getElementById('input-busca').value = '';
+            
+            renderAllSectors();
+        }
+
+        // Selecionar um setor específico (abre a ficha e destaca o mapa)
+        function selectSector(setor, buildingId) {
+            const listItem = document.getElementById(`item-${setor.sigla}`);
+            const isAlreadySelected = listItem.classList.contains('selected');
+
+            // Recolhe todos os setores abertos
+            document.querySelectorAll('.sector-item').forEach(el => el.classList.remove('selected'));
+            document.querySelectorAll('.building-hotspot').forEach(el => el.classList.remove('active'));
+
+            // Se o setor clicado já estava aberto, ele apenas fecha. Senão, abre ele e destaca.
+            if (!isAlreadySelected) {
+                listItem.classList.add('selected');
+                const hotspot = document.getElementById(`geo-${buildingId}`);
+                if(hotspot) hotspot.classList.add('active');
+                
+                // Rola a lista suavemente para exibir o setor expandido por completo
+                setTimeout(() => {
+                    listItem.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                }, 100);
+            } else {
+                // Se fechou o setor, mas existe um filtro de bloco ativo, mantem o bloco destacado
+                if (blocoAtivoAtual) {
+                    const hotspot = document.getElementById(`geo-${blocoAtivoAtual}`);
+                    if(hotspot) hotspot.classList.add('active');
+                }
+            }
+
+            document.getElementById('mensagem-inicial').style.display = 'none';
+        }
+
+        // Sistema de busca
+        function searchSectors() {
+            const query = document.getElementById('input-busca').value.toLowerCase().trim();
+            const lista = document.getElementById('lista-setores');
+            
+            // Limpa visualmente a seleção do mapa ao realizar uma busca em texto
+            document.querySelectorAll('.building-hotspot').forEach(el => el.classList.remove('active'));
+            blocoAtivoAtual = null;
+            document.getElementById('btn-limpar-filtro').style.display = 'none';
+
+            if (query === '') {
+                document.getElementById('titulo-lista').textContent = "Setores no Campus";
+                renderAllSectors();
+                return;
+            }
+
+            document.getElementById('titulo-lista').textContent = "Resultados da Busca";
+            lista.innerHTML = '';
+            let totalEncontrado = 0;
+
+            // Ordena os blocos alfabeticamente pelo nome do prédio para a busca também
+            const blocosOrdenados = Object.keys(dadosCampus).sort((a, b) => {
+                return dadosCampus[a].nome.localeCompare(dadosCampus[b].nome, 'pt-BR');
+            });
+
+            for (const buildingId of blocosOrdenados) {
+                // Busca em Setores
+                dadosCampus[buildingId].setores.forEach(setor => {
+                    if (setor.sigla.toLowerCase().includes(query) || 
+                        setor.nome.toLowerCase().includes(query) ||
+                        (setor.descricao && setor.descricao.toLowerCase().includes(query))) {
+                        lista.appendChild(createSectorItemElement(setor, buildingId));
+                        totalEncontrado++;
+                    }
+                });
+                
+                // Busca em Ambientes
+                dadosCampus[buildingId].ambientes.forEach(ambiente => {
+                    if (ambiente.nome.toLowerCase().includes(query) || 
+                        ambiente.tipo.toLowerCase().includes(query) ||
+                        (ambiente.descricao && ambiente.descricao.toLowerCase().includes(query))) {
+                        lista.appendChild(createEnvironmentItemElement(ambiente, buildingId));
+                        totalEncontrado++;
+                    }
+                });
+            }
+
+            if (totalEncontrado === 0) {
+                lista.innerHTML = '<li style="color: var(--texto-mutado); font-size: 0.9rem; font-style: italic; padding: 10px;">Nenhum setor encontrado.</li>';
+            }
+        }
+
+        // Dispara o carregamento da planilha assim que a página terminar de montar
+        window.onload = carregarDadosDaPlanilha;
+    </script>
+</body>
+</html>
